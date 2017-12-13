@@ -16,8 +16,15 @@ RUN set -ex; \
     go get gopkg.in/mgo.v2; \
     go get gopkg.in/mgo.v2/bson; \
     cd ${GOPATH}/src/github.com/facebookgo/rocks-strata/strata/cmd/mongo/lreplica_drivers/strata; \
-    go build; \
-    cp strata /usr/local/bin;
+      go build; \
+      cp strata /usr/local/bin; \
+    go get github.com/kr/pty; \
+    go get golang.org/x/crypto/ssh/terminal; \
+    go get gopkg.in/mgo.v2; \
+    go get gopkg.in/mgo.v2/bson; \
+    cd ${GOPATH}/src/github.com/facebookgo/rocks-strata/strata/cmd/mongo/lreplica_drivers/mongoq; \
+      go build; \
+      cp mongoq /usr/local/bin;
 
 FROM debian:stretch-slim AS mongo-rocksdb
 
@@ -54,7 +61,7 @@ RUN set -ex; \
 
 RUN set -ex; \
     cd ${SOURCE_DIR}/mongo; \
-    scons;
+    scons mongo mongod MONGO_VERSION=${MONGODB_VERSION} -j4;
 
 # https://github.com/gperftools/gperftools/issues/693
 # This blocks us from using alpine linux
@@ -62,13 +69,30 @@ RUN set -ex; \
 
 FROM debian@sha256:50a283f43b55f68914da6282263bf81f1e440b6d10565072ef5abd3673df29e8
 ARG HOME=/app
+ARG SOURCE_DIR=/src
 WORKDIR ${HOME}
 
-COPY --from=strata /usr/local/bin/strata /usr/local/bin/strata
-COPY --from=mongo-rocksdb /usr/local/bin/mongod /usr/local/bin/mongod
+ENV DB_DIR=/var/lib/mongodb
+
+COPY scripts ${HOME}/scripts
+COPY --from=strata /usr/local/bin/strata /usr/bin/strata
+COPY --from=strata /usr/local/bin/mongoq /usr/bin/mongoq
+COPY --from=mongo-rocksdb ${SOURCE_DIR}/mongo/build/opt/mongo/mongod /usr/bin/mongod
+COPY --from=mongo-rocksdb ${SOURCE_DIR}/mongo/build/opt/mongo/mongo /usr/bin/mongo
 COPY --from=mongo-rocksdb /opt/rocksdb/include/rocksdb /usr/include/rocksdb
 COPY --from=mongo-rocksdb /opt/rocksdb/lib/librocksdb.a /usr/lib/librocksdb.a
 COPY --from=dumb-init /dumb-init /usr/local/bin/dumb-init
-RUN chmod +x /usr/local/bin/dumb-init
+
+RUN set -ex; \
+  apt-get update; \
+  apt-get -qq -y --no-install-recommends install \
+    python-pip python-setuptools fuse; \
+  pip install wheel; \
+  pip install yas3fs; \
+  mkdir -p ${DB_DIR}; \
+  cp ${HOME}/scripts/init.d/* /etc/init.d/; \
+    update-rc.d disable_thp defaults; \
+  chmod +x /usr/local/bin/dumb-init;
 
 ENTRYPOINT ["/usr/local/bin/dumb-init", "--"]
+CMD ["/bin/bash", "/app/scripts/mongod.sh"]
